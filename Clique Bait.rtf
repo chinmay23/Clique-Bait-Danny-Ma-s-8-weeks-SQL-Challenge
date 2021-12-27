@@ -1,0 +1,168 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2636
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 --How many users are there?\
+SELECT COUNT(DISTINCT user_id) from clique_bait.users\
+\
+--How many cookies does each user have on average?\
+WITH avg_cookies AS (\
+SELECT user_id, COUNT(cookie_id) AS NoOfCookies \
+FROM clique_bait.users \
+GROUP BY user_id)\
+SELECT ROUND(AVG(NoOfCookies),2) AS avg_cookies_per_user FROM avg_cookies\
+\
+--What is the unique number of visits by all users per month?\
+WITH uniq_events AS(\
+SELECT user_id, visit_id, EXTRACT(month from event_time) AS Month_ \
+FROM clique_bait.events AS e \
+INNER JOIN \
+clique_bait.users AS u\
+ON e.cookie_id=u.cookie_id \
+GROUP BY \
+user_id, visit_id,event_time)\
+SELECT month_, count(DISTINCT visit_id) \
+FROM uniq_events GROUP BY month_\
+\
+--What is the number of events for each event type?\
+SELECT ei.event_name, COUNT(e.event_type)  AS NoOfEvents\
+FROM clique_bait.events AS e \
+INNER JOIN clique_bait.event_identifier AS ei \
+ON e.event_type=ei.event_type \
+GROUP BY ei.event_name\
+\
+SELECT * FROM clique_bait.event_identifier\
+\
+--What is the percentage of visits which have a purchase event?\
+WITH pctOfvisits AS (\
+SELECT SUM(CASE WHEN event_type=3 THEN 1 ELSE 0 END) AS purchase_events , COUNT(*) as total_visits FROM clique_bait.events) \
+SELECT ROUND((100*purchase_events/total_visits),2) FROM pctOfvisits\
+\
+--What is the percentage of visits which view the checkout page but do not have a purchase event?\
+\
+\
+--What are the top 3 pages by number of views?\
+\
+SELECT ph.page_name, COUNT(*) \
+FROM clique_bait.events as e inner join clique_bait.page_hierarchy as ph on e.page_id=ph.page_id inner join \
+clique_bait.event_identifier as ei on e.event_type=ei.event_type where e.event_type=1 group by ph.page_name order by COUNT(*) DESC LIMIT 3\
+\
+--What is the number of views and cart adds for each product category?\
+SELECT ph.product_category, count(*), ei.event_name FROM clique_bait.page_hierarchy AS ph INNER JOIN clique_bait.events AS e ON ph.page_id=e.page_id INNER JOIN clique_bait.event_identifier \
+AS ei ON e.event_type=ei.event_type WHERE e.event_type IN (1,2) group by ph.product_category, ei.event_name \
+\
+\
+--Product Funnel Analysis\
+--Using a single SQL query - A new output table which will have the following details:\
+\
+--How many times was each product viewed?\
+--How many times was each product added to cart?\
+--How many times was each product added to a cart but not purchased (abandoned)?\
+--How many times was each product purchased?\
+\
+DROP TABLE IF EXISTS prod_metrics;\
+CREATE TEMP TABLE prod_metrics AS (\
+WITH prod_views_add_cart AS (\
+SELECT e.visit_id, ph.product_id, ph.page_name, ph.product_category,\
+SUM(CASE WHEN e.event_type=1 THEN 1 ELSE 0 END) AS NoOfViews,\
+SUM(CASE WHEN e.event_type=2 THEN 1 ELSE 0 END) AS AddedToCart\
+FROM clique_bait.page_hierarchy AS ph \
+INNER JOIN clique_bait.events AS e \
+ON ph.page_id=e.page_id\
+INNER JOIN clique_bait.event_identifier AS ei\
+ON e.event_type=ei.event_type\
+WHERE ph.product_id IS NOT NULL\
+GROUP BY e.visit_id, ph.product_id, ph.page_name, ph.product_category\
+),\
+purchases AS (\
+SELECT visit_id \
+FROM clique_bait.events \
+WHERE event_type=3\
+),\
+combined AS (\
+SELECT\
+t1.visit_id,\
+t1.product_id,\
+t1.page_name,\
+t1.product_category,\
+t1.NoOfViews,\
+t1.AddedToCart,\
+CASE WHEN t2.visit_id IS NULL THEN 1 ELSE 0 END AS purchase \
+FROM prod_views_add_cart AS t1 \
+LEFT JOIN purchases AS t2 \
+ON \
+t1.visit_id = t2.visit_id\
+)\
+SELECT \
+product_id,\
+page_name,\
+product_category,\
+SUM(NoOfViews) AS NOofViews,\
+SUM(AddedToCart) AS addedToCart,\
+SUM(CASE WHEN AddedToCart=0 AND purchase=0 THEN 1 ELSE 0 END) AS abandoned,\
+SUM(CASE WHEN AddedToCart=1 AND purchase=1 THEN 1 ELSE 0 END) AS purchased \
+FROM combined\
+GROUP BY \
+product_id,\
+page_name,\
+product_category\
+)\
+\
+\
+DROP TABLE IF EXISTS prod_category_metrics;\
+CREATE TEMP TABLE prod_category_metrics AS ( \
+SELECT \
+product_category,\
+SUM(NOofViews) AS NOofViews,\
+SUM(addedToCart) AS addedToCart,\
+SUM(abandoned) AS abandoned,\
+SUM(purchased) AS purchased\
+FROM prod_metrics\
+GROUP BY product_category\
+)\
+\
+--Which product had the most views, cart adds and purchases?\
+SELECT * FROM prod_metrics ORDER BY NOOfViews DESC LIMIT 1\
+\
+SELECT * FROM prod_metrics ORDER BY addedToCart DESC LIMIT 1\
+\
+SELECT * FROM prod_metrics ORDER BY purchased DESC LIMIT 1\
+\
+\
+--Which product was most likely to be abandoned?\
+\
+SELECT \
+page_name, \
+abandoned/addedToCart as abandoned_likelhood\
+FROM prod_metrics\
+ORDER BY \
+abandoned_likelhood DESC\
+\
+--Which product had the highest view to purchase percentage?\
+SELECT \
+page_name,\
+ROUND(100*purchased/NOofViews,2) AS pct \
+FROM \
+prod_metrics\
+ORDER BY \
+pct DESC\
+\
+--What is the average conversion rate from view to cart add?\
+\
+SELECT \
+AVG(addedToCart/NOofViews)*100 AS view_to_addCart_conv_rate \
+FROM \
+prod_metrics \
+\
+--What is the average conversion rate from cart add to purchase?\
+SELECT \
+AVG(purchased/addedToCart)*100 AS addCart_purchase_conv_rate \
+FROM \
+prod_metrics \
+\
+\
+\
+}
